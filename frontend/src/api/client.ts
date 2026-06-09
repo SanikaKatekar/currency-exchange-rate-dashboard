@@ -6,6 +6,13 @@ import type { SummaryResponse } from "../types";
 /** Base URL for API calls; empty string uses same-origin proxy in dev/prod. */
 const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "";
 
+/**
+ * API key sent as X-API-Key on every /summary request.
+ * Set VITE_API_KEY in frontend/.env.local (dev) or as a Docker build arg (prod).
+ * Baked into the bundle at build time — intentional for a browser-facing SPA.
+ */
+const API_KEY: string = import.meta.env.VITE_API_KEY ?? "";
+
 /** Extract a human-readable message from API error payloads. */
 function parseApiError(payload: unknown, fallback: string): string {
   if (!payload || typeof payload !== "object") {
@@ -45,7 +52,9 @@ export async function fetchSummary(params: {
   breakdown: "day" | "none";
 }): Promise<SummaryResponse> {
   const query = new URLSearchParams(params);
-  const response = await fetch(`${API_BASE}/api/v1/summary?${query.toString()}`);
+  const response = await fetch(`${API_BASE}/api/v1/summary?${query.toString()}`, {
+    headers: API_KEY ? { "X-API-Key": API_KEY } : {},
+  });
   const payload = await response.json();
 
   if (!response.ok) {
