@@ -29,7 +29,9 @@ async def fake_redis(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[None]:
     async def _init_redis(_url: str) -> None:
         set_redis_client(client)
 
+    # Patch both the module and main's imported binding so lifespan uses fakeredis.
     monkeypatch.setattr("app.core.redis_client.init_redis", _init_redis)
+    monkeypatch.setattr("app.main.init_redis", _init_redis)
     set_redis_client(client)
     yield
     await close_redis()

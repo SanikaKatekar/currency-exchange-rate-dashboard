@@ -3,7 +3,7 @@ HTTP middleware for request tracing, logging, and rate limiting.
 
 Overview:
     Starlette middleware components that enrich each request with a correlation ID,
-    emit structured logs and latency metrics, and enforce per-IP rate limits on
+    emit request logs with correlation IDs and latency metrics, and enforce per-IP rate limits on
     the summary endpoint via a shared Redis sliding window.
 
 Classes:
@@ -13,7 +13,6 @@ Classes:
 
 from __future__ import annotations
 
-import logging
 import time
 import uuid
 from collections.abc import Awaitable, Callable
@@ -22,16 +21,17 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import Response
 
+from app.core.logging_config import get_logger
 from app.core.metrics import REQUEST_LATENCY
 from app.core.rate_limiter import allow_request as redis_allow_request
 from app.core.settings import get_settings
 
-logger: logging.Logger = logging.getLogger("fx_pulse")
+logger = get_logger("http")
 
 
 class RequestContextMiddleware(BaseHTTPMiddleware):
     """
-    Attach request IDs, emit structured logs, and record latency metrics.
+    Attach request IDs, emit request logs, and record latency metrics.
 
     Methods:
         dispatch: Process an incoming request and enrich the outgoing response.
@@ -61,14 +61,12 @@ class RequestContextMiddleware(BaseHTTPMiddleware):
         if endpoint.startswith("/api/"):
             REQUEST_LATENCY.labels(endpoint=endpoint).observe(duration_ms / 1000)
         logger.info(
-            "request_completed",
-            extra={
-                "request_id": request_id,
-                "path": endpoint,
-                "method": request.method,
-                "status_code": response.status_code,
-                "duration_ms": round(duration_ms, 2),
-            },
+            "request_completed request_id=%s method=%s path=%s status=%s duration_ms=%s",
+            request_id,
+            request.method,
+            endpoint,
+            response.status_code,
+            round(duration_ms, 2),
         )
         response.headers["X-Request-ID"] = request_id
         return response
@@ -108,6 +106,12 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         allowed = await redis_allow_request(client_ip, settings.rate_limit_per_minute)
         if not allowed:
             request_id: str = getattr(request.state, "request_id", "unknown")
+            logger.warning(
+                "rate_limit_exceeded request_id=%s client_ip=%s path=%s",
+                request_id,
+                client_ip,
+                request.url.path,
+            )
             return Response(
                 content='{"error":"Rate limit exceeded","code":"rate_limit_exceeded","request_id":"'
                 + request_id

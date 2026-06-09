@@ -37,6 +37,14 @@ For development without Docker, use the local steps in [docs/DEPLOYMENT.md](docs
 
 ## Local development
 
+**Prerequisite:** Redis must be running. The API uses Redis for cache, rate limits, and the circuit breaker.
+
+```bash
+# Start Redis only (requires Docker Desktop)
+docker compose up redis -d
+# Or: brew services start redis
+```
+
 **Backend**
 
 ```bash
@@ -53,6 +61,10 @@ cd frontend
 npm install
 npm run dev
 ```
+
+Open http://localhost:5173 — Vite proxies `/api` to the backend on port 8000.
+
+See [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) for full local setup and troubleshooting.
 
 ## API examples
 
@@ -77,11 +89,13 @@ curl http://localhost:8000/api/v1/health
 curl "http://localhost:8000/api/v1/summary?start=2026-06-03&end=2026-06-09&breakdown=day"
 ```
 
-### Readiness
+### Readiness (Redis + fallback file)
 
 ```bash
 curl http://localhost:8000/api/v1/ready
 ```
+
+Returns 503 if Redis is down or the offline sample file is missing. Use this before debugging summary errors.
 
 ## Resilience
 

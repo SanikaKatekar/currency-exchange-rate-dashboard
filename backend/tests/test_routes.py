@@ -10,7 +10,7 @@ Fixtures:
 
 Functions:
     test_health_has_timestamp: Health response includes timestamp metadata.
-    test_ready_ok: Ready endpoint succeeds when sample file exists.
+    test_ready_ok: Ready endpoint succeeds when Redis and sample file are healthy.
     test_summary_validation_error: Invalid date range returns HTTP 400.
     test_summary_happy_path: Summary math matches mocked Frankfurter data.
     test_openapi_contains_summary: OpenAPI schema exposes summary route.
@@ -73,12 +73,34 @@ async def test_health_has_timestamp() -> None:
 
 @pytest.mark.asyncio
 async def test_ready_ok(sample_file: Path) -> None:
-    """Ready endpoint returns 200 when the sample fallback file exists."""
+    """Ready endpoint returns 200 when Redis and the sample fallback file are healthy."""
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         response = await client.get("/api/v1/ready")
     assert response.status_code == 200
-    assert response.json()["sample_file_ready"] is True
+    payload = response.json()
+    assert payload["sample_file_ready"] is True
+    assert payload["redis_ready"] is True
+
+
+@pytest.mark.asyncio
+async def test_ready_returns_503_when_redis_unavailable(
+    sample_file: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Ready endpoint returns 503 when Redis is unreachable."""
+
+    async def _redis_down() -> bool:
+        return False
+
+    monkeypatch.setattr("app.api.v1.routes.ping_redis", _redis_down)
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.get("/api/v1/ready")
+    assert response.status_code == 503
+    payload = response.json()["detail"]
+    assert payload["sample_file_ready"] is True
+    assert payload["redis_ready"] is False
 
 
 @pytest.mark.asyncio
@@ -129,6 +151,53 @@ async def test_summary_happy_path(sample_file: Path) -> None:
     assert len(payload["days"]) == 2
     assert payload["days"][0]["pct_change"] is None
     assert payload["days"][1]["pct_change"] == pytest.approx(10.0)
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_summary_breakdown_none(sample_file: Path) -> None:
+    """Return totals only when breakdown is set to none."""
+    respx.get("https://api.frankfurter.dev/latest?from=EUR&to=USD").mock(
+        return_value=Response(404)
+    )
+    respx.get(
+        "https://api.frankfurter.dev/v1/2026-06-03?base=EUR&symbols=USD"
+    ).mock(
+        return_value=Response(
+            200,
+            json={"date": "2026-06-03", "rates": {"USD": 1.1614}},
+        )
+    )
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.get(
+            "/api/v1/summary",
+            params={"start": "2026-06-03", "end": "2026-06-03", "breakdown": "none"},
+        )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["days"] is None
+    assert payload["totals"]["start_rate"] == 1.1614
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_legacy_summary_route(sample_file: Path) -> None:
+    """Legacy unversioned summary route returns the same payload shape."""
+    respx.get(url__regex=r"https://api\.frankfurter\.dev/.*").mock(
+        return_value=Response(
+            200,
+            json={"date": "2026-06-03", "rates": {"USD": 1.1614}},
+        )
+    )
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.get(
+            "/summary",
+            params={"start": "2026-06-03", "end": "2026-06-03", "breakdown": "day"},
+        )
+    assert response.status_code == 200
+    assert response.json()["source"] in {"live", "cache(live)"}
 
 
 @pytest.mark.asyncio

@@ -2,7 +2,8 @@
 Redis-backed sliding-window rate limiter.
 
 Overview:
-    Enforces per-IP request limits shared across all API worker processes.
+    Enforces per-IP request limits shared across all API worker processes using
+    an atomic MULTI/EXEC pipeline over a sorted-set sliding window.
 
 Functions:
     allow_request: Return whether a client IP is within the configured limit.
@@ -11,6 +12,7 @@ Functions:
 from __future__ import annotations
 
 import time
+import uuid
 
 from app.core.redis_client import get_redis
 
@@ -30,10 +32,11 @@ async def allow_request(client_ip: str, limit_per_minute: int) -> bool:
     key = f"fx:ratelimit:{client_ip}"
     now = time.time()
     window_start = now - 60
+    member = f"{now}:{uuid.uuid4().hex}"
 
-    pipe = redis.pipeline()
+    pipe = redis.pipeline(transaction=True)
     pipe.zremrangebyscore(key, 0, window_start)
-    pipe.zadd(key, {str(now): now})
+    pipe.zadd(key, {member: now})
     pipe.zcard(key)
     pipe.expire(key, 60)
     _, _, count, _ = await pipe.execute()
