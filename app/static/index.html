@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>EUR → USD Exchange Rate Dashboard</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+  </head>
+  <body>
+    <div class="page">
+      <header class="hero">
+        <div class="hero-copy">
+          <p class="eyebrow">Currency Exchange Rate Dashboard</p>
+          <h1>See how EUR moves against USD</h1>
+          <p class="subtitle">
+            Pick a date range, compare daily shifts, and spot the trend at a
+            glance. Built for travelers, finance teams, and anyone tracking
+            euro-dollar movement.
+          </p>
+        </div>
+        <div class="hero-badge" title="Fresh data with cache + retry protection">
+          <span class="shield">🛡️</span>
+          <span>Live rates with offline fallback</span>
+        </div>
+      </header>
+
+      <section class="panel controls">
+        <form id="query-form" class="control-grid">
+          <label>
+            Start date
+            <input type="date" id="start-date" required />
+          </label>
+          <label>
+            End date
+            <input type="date" id="end-date" required />
+          </label>
+          <label>
+            Detail level
+            <select id="breakdown">
+              <option value="day" selected>Daily breakdown</option>
+              <option value="none">Summary only</option>
+            </select>
+          </label>
+          <button type="submit" class="primary-btn">Analyze rates</button>
+        </form>
+        <p id="form-hint" class="hint">
+          Tip: try 1–7 days for a clear day-by-day story. Weekends and bank
+          holidays may have no published rate.
+        </p>
+      </section>
+
+      <div id="status" class="status" hidden></div>
+
+      <section id="results" class="results" hidden>
+        <div class="summary-grid">
+          <article class="metric-card">
+            <p class="metric-label">Start rate</p>
+            <p class="metric-value" id="start-rate">—</p>
+          </article>
+          <article class="metric-card">
+            <p class="metric-label">End rate</p>
+            <p class="metric-value" id="end-rate">—</p>
+          </article>
+          <article class="metric-card accent">
+            <p class="metric-label">Total change</p>
+            <p class="metric-value" id="total-change">—</p>
+          </article>
+          <article class="metric-card">
+            <p class="metric-label">Average rate</p>
+            <p class="metric-value" id="mean-rate">—</p>
+          </article>
+        </div>
+
+        <div class="visual-grid">
+          <section class="panel chart-panel">
+            <div class="panel-head">
+              <h2>Rate trend</h2>
+              <p id="source-label" class="source-label"></p>
+            </div>
+            <canvas id="rate-chart" aria-label="EUR to USD rate chart"></canvas>
+          </section>
+
+          <section class="panel table-panel" id="table-section">
+            <div class="panel-head">
+              <h2>Daily breakdown</h2>
+              <p>Day-over-day percentage change</p>
+            </div>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Date</th>
+                    <th>Rate (EUR→USD)</th>
+                    <th>Change vs prior day</th>
+                  </tr>
+                </thead>
+                <tbody id="rates-body"></tbody>
+              </table>
+            </div>
+          </section>
+        </div>
+      </section>
+
+      <footer class="footer">
+        <p>
+          API endpoints:
+          <a href="/health" target="_blank" rel="noreferrer">/health</a>
+          ·
+          <a
+            href="/summary?start=2024-07-01&end=2024-07-03&breakdown=day"
+            target="_blank"
+            rel="noreferrer"
+            >/summary</a
+          >
+        </p>
+        <p class="door-note">🍍 Pineapple by the door — welcome in.</p>
+      </footer>
+    </div>
+
+    <script src="/static/app.js"></script>
+  </body>
+</html>
