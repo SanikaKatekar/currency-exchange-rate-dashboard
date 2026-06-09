@@ -25,7 +25,7 @@ import time
 from datetime import UTC, date, datetime
 from typing import Literal
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 
 from app.api.v1.dependencies import get_file_adapter, get_start_time, get_summary_service
 from app.api.v1.schemas import (
@@ -35,6 +35,7 @@ from app.api.v1.schemas import (
     SummaryResponse,
     SummaryTotals,
 )
+from app.core.auth import require_api_key
 from app.core.logging_config import get_logger
 from app.core.redis_client import ping_redis
 from app.core.settings import get_settings
@@ -159,14 +160,18 @@ async def summary_v1(
     start: date = Query(..., description="Inclusive start date."),
     end: date = Query(..., description="Inclusive end date."),
     breakdown: Literal["day", "none"] = Query("day", description="Daily detail level."),
+    _client: str = Depends(require_api_key),
 ) -> SummaryResponse:
     """
     Return EUR→USD summary data for the requested date range.
+
+    Authentication required: include a valid ``X-API-Key`` header (see ``.env.example``).
 
     Args:
         start: Inclusive start date.
         end: Inclusive end date.
         breakdown: Include daily rows when ``"day"``, totals only when ``"none"``.
+        _client: Authenticated client name from the API key dependency (unused directly).
 
     Returns:
         ``SummaryResponse`` containing totals, optional daily rows, and source label.
@@ -191,14 +196,18 @@ async def legacy_summary(
     start: date = Query(...),
     end: date = Query(...),
     breakdown: Literal["day", "none"] = Query("day"),
+    _client: str = Depends(require_api_key),
 ) -> SummaryResponse:
     """
     Backward-compatible summary endpoint for older clients.
+
+    Authentication required: include a valid ``X-API-Key`` header (see ``.env.example``).
 
     Args:
         start: Inclusive start date.
         end: Inclusive end date.
         breakdown: Detail level, either ``"day"`` or ``"none"``.
+        _client: Authenticated client name from the API key dependency (unused directly).
 
     Returns:
         Same ``SummaryResponse`` payload as :func:`summary_v1`.

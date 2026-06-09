@@ -3,7 +3,8 @@ API route tests for health, readiness, and summary endpoints.
 
 Overview:
     Exercises FastAPI routes through ASGI transport with isolated sample file
-    configuration for readiness checks.
+    configuration for readiness checks. Summary endpoints require a valid
+    X-API-Key header; use the ``configured_api_key`` fixture from conftest.
 
 Fixtures:
     sample_file: Temporary sample FX file and dependency cache reset.
@@ -13,6 +14,10 @@ Functions:
     test_ready_ok: Ready endpoint succeeds when Redis and sample file are healthy.
     test_summary_validation_error: Invalid date range returns HTTP 400.
     test_summary_happy_path: Summary math matches mocked Frankfurter data.
+    test_summary_requires_api_key: Summary returns 401 without X-API-Key.
+    test_summary_rejects_invalid_api_key: Summary returns 401 for wrong key.
+    test_summary_accepts_valid_api_key: Summary returns 200 with valid key.
+    test_health_does_not_require_api_key: Health stays public.
     test_openapi_contains_summary: OpenAPI schema exposes summary route.
 """
 
@@ -104,20 +109,21 @@ async def test_ready_returns_503_when_redis_unavailable(
 
 
 @pytest.mark.asyncio
-async def test_summary_validation_error() -> None:
+async def test_summary_validation_error(configured_api_key: str) -> None:
     """Invalid date range returns HTTP 400."""
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         response = await client.get(
             "/api/v1/summary",
             params={"start": "2026-06-09", "end": "2026-06-03", "breakdown": "day"},
+            headers={"X-API-Key": configured_api_key},
         )
     assert response.status_code == 400
 
 
 @pytest.mark.asyncio
 @respx.mock
-async def test_summary_happy_path(sample_file: Path) -> None:
+async def test_summary_happy_path(sample_file: Path, configured_api_key: str) -> None:
     """Return correct totals and daily rows for mocked Frankfurter data."""
     respx.get("https://api.frankfurter.dev/2026-06-03..2026-06-04").mock(
         return_value=Response(404)
@@ -140,6 +146,7 @@ async def test_summary_happy_path(sample_file: Path) -> None:
         response = await client.get(
             "/api/v1/summary",
             params={"start": "2026-06-03", "end": "2026-06-04", "breakdown": "day"},
+            headers={"X-API-Key": configured_api_key},
         )
     assert response.status_code == 200
     payload = response.json()
@@ -155,7 +162,7 @@ async def test_summary_happy_path(sample_file: Path) -> None:
 
 @pytest.mark.asyncio
 @respx.mock
-async def test_summary_breakdown_none(sample_file: Path) -> None:
+async def test_summary_breakdown_none(sample_file: Path, configured_api_key: str) -> None:
     """Return totals only when breakdown is set to none."""
     respx.get("https://api.frankfurter.dev/latest?from=EUR&to=USD").mock(
         return_value=Response(404)
@@ -173,6 +180,7 @@ async def test_summary_breakdown_none(sample_file: Path) -> None:
         response = await client.get(
             "/api/v1/summary",
             params={"start": "2026-06-03", "end": "2026-06-03", "breakdown": "none"},
+            headers={"X-API-Key": configured_api_key},
         )
     assert response.status_code == 200
     payload = response.json()
@@ -182,7 +190,7 @@ async def test_summary_breakdown_none(sample_file: Path) -> None:
 
 @pytest.mark.asyncio
 @respx.mock
-async def test_legacy_summary_route(sample_file: Path) -> None:
+async def test_legacy_summary_route(sample_file: Path, configured_api_key: str) -> None:
     """Legacy unversioned summary route returns the same payload shape."""
     respx.get(url__regex=r"https://api\.frankfurter\.dev/.*").mock(
         return_value=Response(
@@ -195,13 +203,16 @@ async def test_legacy_summary_route(sample_file: Path) -> None:
         response = await client.get(
             "/summary",
             params={"start": "2026-06-03", "end": "2026-06-03", "breakdown": "day"},
+            headers={"X-API-Key": configured_api_key},
         )
     assert response.status_code == 200
     assert response.json()["source"] in {"live", "cache(live)"}
 
 
 @pytest.mark.asyncio
-async def test_summary_rate_limit_returns_429(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_summary_rate_limit_returns_429(
+    monkeypatch: pytest.MonkeyPatch, configured_api_key: str
+) -> None:
     """Return HTTP 429 when the Redis-backed per-IP limit is exceeded."""
     monkeypatch.setenv("RATE_LIMIT_PER_MINUTE", "1")
     from app.api.v1 import dependencies as deps
@@ -212,21 +223,23 @@ async def test_summary_rate_limit_returns_429(monkeypatch: pytest.MonkeyPatch) -
 
     transport = ASGITransport(app=app)
     params = {"start": "2026-06-03", "end": "2026-06-04", "breakdown": "day"}
+    headers = {"X-API-Key": configured_api_key}
     async with AsyncClient(transport=transport, base_url="http://test") as client:
-        await client.get("/api/v1/summary", params=params)
-        response = await client.get("/api/v1/summary", params=params)
+        await client.get("/api/v1/summary", params=params, headers=headers)
+        response = await client.get("/api/v1/summary", params=params, headers=headers)
     assert response.status_code == 429
     get_settings.cache_clear()
 
 
 @pytest.mark.asyncio
-async def test_summary_date_range_too_large() -> None:
+async def test_summary_date_range_too_large(configured_api_key: str) -> None:
     """Reject date ranges longer than one year with HTTP 400."""
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         response = await client.get(
             "/api/v1/summary",
             params={"start": "2024-01-01", "end": "2026-06-09", "breakdown": "day"},
+            headers={"X-API-Key": configured_api_key},
         )
     assert response.status_code == 400
 
@@ -278,3 +291,66 @@ async def test_openapi_contains_summary() -> None:
     assert response.status_code == 200
     schema = response.json()
     assert "/api/v1/summary" in schema["paths"]
+
+
+# ── Auth-specific tests ──────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_summary_requires_api_key(
+    sample_file: Path, configured_api_key: str
+) -> None:
+    """Summary endpoint returns 401 without the X-API-Key header."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.get(
+            "/api/v1/summary",
+            params={"start": "2026-06-03", "end": "2026-06-03", "breakdown": "none"},
+        )
+    assert response.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_summary_rejects_invalid_api_key(
+    sample_file: Path, configured_api_key: str
+) -> None:
+    """Summary endpoint returns 401 for an unrecognized API key."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.get(
+            "/api/v1/summary",
+            params={"start": "2026-06-03", "end": "2026-06-03", "breakdown": "none"},
+            headers={"X-API-Key": "wrong-key"},
+        )
+    assert response.status_code == 401
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_summary_accepts_valid_api_key(
+    sample_file: Path, configured_api_key: str
+) -> None:
+    """Summary endpoint returns 200 with a valid X-API-Key header."""
+    respx.get(url__regex=r"https://api\.frankfurter\.dev/.*").mock(
+        return_value=Response(
+            200,
+            json={"date": "2026-06-03", "rates": {"USD": 1.1614}},
+        )
+    )
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.get(
+            "/api/v1/summary",
+            params={"start": "2026-06-03", "end": "2026-06-03", "breakdown": "none"},
+            headers={"X-API-Key": configured_api_key},
+        )
+    assert response.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_health_does_not_require_api_key() -> None:
+    """Health endpoint stays public for load balancer probes."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.get("/api/v1/health")
+    assert response.status_code == 200
