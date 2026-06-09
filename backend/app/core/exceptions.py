@@ -18,6 +18,10 @@ from __future__ import annotations
 from fastapi import Request
 from fastapi.responses import JSONResponse
 
+from app.core.logging_config import get_logger
+
+logger = get_logger("errors")
+
 
 class AppError(Exception):
     """
@@ -48,6 +52,13 @@ async def app_error_handler(request: Request, exc: AppError) -> JSONResponse:
         JSONResponse containing ``error``, ``code``, and ``request_id`` fields.
     """
     request_id: str = getattr(request.state, "request_id", "unknown")
+    logger.warning(
+        "app_error request_id=%s code=%s status=%s message=%s",
+        request_id,
+        exc.code,
+        exc.status_code,
+        exc.message,
+    )
     return JSONResponse(
         status_code=exc.status_code,
         content={
@@ -70,6 +81,12 @@ async def unhandled_error_handler(request: Request, exc: Exception) -> JSONRespo
         JSONResponse with HTTP 500 and a generic internal error payload.
     """
     request_id: str = getattr(request.state, "request_id", "unknown")
+    logger.exception(
+        "unhandled_error request_id=%s path=%s method=%s",
+        request_id,
+        request.url.path,
+        request.method,
+    )
     return JSONResponse(
         status_code=500,
         content={

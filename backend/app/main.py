@@ -6,14 +6,12 @@ Overview:
     Prometheus metrics, and manages startup/shutdown hooks for shared resources.
 
 Functions:
-    configure_logging: Configure root logging level and format for the process.
     lifespan: Async context manager for startup and shutdown lifecycle events.
     create_app: Construct and return a fully configured FastAPI application.
 """
 
 from __future__ import annotations
 
-import logging
 import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -25,25 +23,12 @@ from prometheus_client import make_asgi_app
 from app.api.v1.dependencies import close_http_client, set_start_time
 from app.api.v1.routes import legacy_router, router
 from app.core.exceptions import AppError, app_error_handler, unhandled_error_handler
+from app.core.logging_config import configure_logging, get_logger
 from app.core.middleware import RateLimitMiddleware, RequestContextMiddleware
 from app.core.redis_client import close_redis, init_redis
 from app.core.settings import get_settings
 
-
-def configure_logging(level: str) -> None:
-    """
-    Configure process-wide logging for the API service.
-
-    Args:
-        level: Logging level name (for example ``"INFO"`` or ``"DEBUG"``).
-
-    Returns:
-        None. Side effect: configures the root logger.
-    """
-    logging.basicConfig(
-        level=getattr(logging, level.upper(), logging.INFO),
-        format="%(asctime)s %(levelname)s %(name)s %(message)s",
-    )
+logger = get_logger("app")
 
 
 @asynccontextmanager
@@ -51,7 +36,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """
     Manage application startup and shutdown lifecycle hooks.
 
-    On startup, logging is configured and the process start time is recorded.
+    On startup, logging is configured, Redis is connected, and the process start
+    time is recorded. Startup fails fast when Redis is unreachable.
     On shutdown, the shared HTTP client and singleton services are closed.
 
     Args:
@@ -65,11 +51,19 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """
     settings = get_settings()
     configure_logging(settings.log_level)
+    logger.info(
+        "startup_begin app_version=%s log_level=%s",
+        settings.app_version,
+        settings.log_level,
+    )
     await init_redis(settings.redis_url)
     set_start_time(time.time())
+    logger.info("startup_complete redis_url=%s", settings.redis_url)
     yield
+    logger.info("shutdown_begin")
     await close_redis()
     await close_http_client()
+    logger.info("shutdown_complete")
 
 
 def create_app() -> FastAPI:

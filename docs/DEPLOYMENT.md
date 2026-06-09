@@ -24,6 +24,20 @@ If Docker is not installed, use the **local development** flow below instead —
 
 ## Local development (no Docker)
 
+**Prerequisite:** Redis must be running. The API uses Redis for cache, rate limiting, and the circuit breaker. Without it, `/api/v1/ready` returns 503 and `/api/v1/summary` fails.
+
+Start Redis (pick one):
+
+```bash
+# Docker Desktop — Redis only
+docker compose up redis -d
+
+# Or Homebrew
+brew services start redis
+```
+
+Verify: `redis-cli ping` should return `PONG`.
+
 **Backend**
 
 ```bash
@@ -55,6 +69,7 @@ Open http://localhost:5173
 
 | Variable | Default | Description |
 |----------|---------|-------------|
+| `REDIS_URL` | `redis://localhost:6379/0` | Redis connection URL (required) |
 | `CORS_ORIGINS` | localhost origins | Comma-separated allowed origins |
 | `CACHE_TTL_SECONDS` | 300 | FX cache TTL |
 | `MAX_RETRIES` | 3 | Frankfurter retry count |
@@ -65,6 +80,8 @@ Copy `.env.example` to `.env` for local overrides.
 
 ## Health checks
 
-- Liveness: `GET /api/v1/health`
-- Readiness: `GET /api/v1/ready`
-- Metrics: `GET /metrics`
+- **Liveness:** `GET /api/v1/health` — process is running (use for basic uptime probes)
+- **Readiness:** `GET /api/v1/ready` — Redis reachable and offline sample file present (use for load balancer routing)
+- **Metrics:** `GET /metrics` — Prometheus scrape endpoint
+
+Docker Compose, the backend Dockerfile, and Render use **readiness** (`/api/v1/ready`) so traffic is not routed to pods missing Redis or the fallback file.

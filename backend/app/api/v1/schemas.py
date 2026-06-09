@@ -47,11 +47,13 @@ class ReadyResponse(BaseModel):
         status: ``"ready"`` or ``"not_ready"``.
         timestamp: Current server time in UTC.
         sample_file_ready: Whether the offline fallback file exists.
+        redis_ready: Whether Redis responds to PING.
     """
 
     status: str
     timestamp: datetime
     sample_file_ready: bool
+    redis_ready: bool
 
 
 class DayRate(BaseModel):

@@ -28,11 +28,14 @@ from typing import Any
 
 import httpx
 
-from app.core.circuit_breaker import RedisCircuitBreaker
+from app.core.circuit_breaker import CircuitOpenError, RedisCircuitBreaker
+from app.core.logging_config import get_logger
 from app.core.metrics import FALLBACKS, RETRIES
 from app.core.redis_client import get_redis
 from app.core.settings import Settings
 from app.domain.ports import FxRateProvider, FxSeries
+
+logger = get_logger("fx")
 
 
 def parse_rates_payload(payload: dict[str, Any], to_currency: str) -> dict[date, float]:
@@ -166,7 +169,8 @@ class FrankfurterAdapter:
             RuntimeError: If the circuit breaker is open or all retries fail.
         """
         if not await self._breaker.allow_request():
-            raise RuntimeError("Circuit breaker is open")
+            logger.warning("frankfurter_circuit_open action=request_with_retry url=%s", url)
+            raise CircuitOpenError("Circuit breaker is open")
 
         last_error: Exception | None = None
         for attempt in range(self._settings.max_retries):
@@ -183,12 +187,24 @@ class FrankfurterAdapter:
             except (httpx.HTTPError, json.JSONDecodeError) as exc:
                 last_error = exc
                 RETRIES.inc()
+                logger.warning(
+                    "frankfurter_retry attempt=%s url=%s error=%s",
+                    attempt + 1,
+                    url,
+                    exc,
+                )
                 if attempt < self._settings.max_retries - 1:
                     await self._async_sleep(
                         self._settings.retry_backoff_seconds * (2**attempt)
                     )
 
         await self._breaker.record_failure()
+        logger.error(
+            "frankfurter_request_failed url=%s max_retries=%s last_error=%s",
+            url,
+            self._settings.max_retries,
+            last_error,
+        )
         raise RuntimeError(f"Frankfurter request failed after retries: {last_error}")
 
     async def _async_sleep(self, seconds: float) -> None:
@@ -223,8 +239,19 @@ class FrankfurterAdapter:
             ``FxSeries`` with ``source="live"`` and rates filtered to the range.
 
         Raises:
+            CircuitOpenError: If the circuit breaker is open.
             RuntimeError: If all candidate URLs fail to return usable data.
         """
+        if not await self._breaker.allow_request():
+            logger.warning(
+                "frankfurter_circuit_open action=fetch_rates start=%s end=%s pair=%s/%s",
+                start.isoformat(),
+                end.isoformat(),
+                from_currency,
+                to_currency,
+            )
+            raise CircuitOpenError("Circuit breaker is open")
+
         errors: list[str] = []
         for url in build_urls(self._settings, start, end, from_currency, to_currency):
             try:
@@ -234,6 +261,8 @@ class FrankfurterAdapter:
                 if not daily:
                     raise ValueError("No exchange rates returned for the requested range.")
                 return FxSeries.create(daily, "live")
+            except CircuitOpenError:
+                raise
             except (
                 RuntimeError,
                 httpx.HTTPError,
@@ -241,6 +270,12 @@ class FrankfurterAdapter:
                 ValueError,
             ) as exc:
                 errors.append(f"{url} -> {exc}")
+        logger.error(
+            "frankfurter_fetch_failed start=%s end=%s errors=%s",
+            start.isoformat(),
+            end.isoformat(),
+            "; ".join(errors),
+        )
         raise RuntimeError("; ".join(errors))
 
 
@@ -306,6 +341,14 @@ class FileFallbackAdapter:
         if not filtered:
             raise ValueError("Offline sample data does not cover requested dates.")
         FALLBACKS.inc()
+        logger.warning(
+            "offline_fallback_used start=%s end=%s pair=%s/%s path=%s",
+            start.isoformat(),
+            end.isoformat(),
+            from_currency,
+            to_currency,
+            self._settings.sample_fx_path,
+        )
         return FxSeries.create(filtered, "offline_fallback")
 
 
@@ -374,9 +417,12 @@ class CachedFxProvider:
             CACHE_HITS.inc()
             payload = json.loads(cached)
             rates = {date.fromisoformat(k): float(v) for k, v in payload["rates"].items()}
-            return FxSeries.create(rates, cache_source_label(payload["origin_source"]))
+            source = cache_source_label(payload["origin_source"])
+            logger.debug("cache_hit key=%s source=%s", key, source)
+            return FxSeries.create(rates, source)
 
         CACHE_MISSES.inc()
+        logger.debug("cache_miss key=%s", key)
         series = await self._inner.fetch_rates(start, end, from_currency, to_currency)
         origin = series.source if series.source in ("live", "offline_fallback") else "live"
         await redis.setex(
@@ -437,9 +483,22 @@ class FallbackFxProvider:
         try:
             return await self._primary.fetch_rates(start, end, from_currency, to_currency)
         except (RuntimeError, httpx.HTTPError, json.JSONDecodeError, ValueError) as primary_exc:
+            logger.warning(
+                "primary_provider_failed start=%s end=%s error=%s",
+                start.isoformat(),
+                end.isoformat(),
+                primary_exc,
+            )
             try:
                 return await self._fallback.fetch_rates(start, end, from_currency, to_currency)
             except (RuntimeError, ValueError, OSError) as fallback_exc:
+                logger.error(
+                    "fallback_provider_failed start=%s end=%s primary_error=%s fallback_error=%s",
+                    start.isoformat(),
+                    end.isoformat(),
+                    primary_exc,
+                    fallback_exc,
+                )
                 raise RuntimeError(
                     f"Network and offline fallback both failed. primary: {primary_exc}; "
                     f"fallback: {fallback_exc}"

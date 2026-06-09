@@ -6,6 +6,34 @@ import type { SummaryResponse } from "../types";
 /** Base URL for API calls; empty string uses same-origin proxy in dev/prod. */
 const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "";
 
+/** Extract a human-readable message from API error payloads. */
+function parseApiError(payload: unknown, fallback: string): string {
+  if (!payload || typeof payload !== "object") {
+    return fallback;
+  }
+
+  const body = payload as Record<string, unknown>;
+
+  if (typeof body.error === "string") {
+    return body.error;
+  }
+
+  if (typeof body.detail === "string") {
+    return body.detail;
+  }
+
+  if (body.detail && typeof body.detail === "object") {
+    const detail = body.detail as Record<string, unknown>;
+    if (detail.status === "not_ready") {
+      const sampleReady = detail.sample_file_ready ? "ready" : "missing";
+      const redisReady = detail.redis_ready ? "ready" : "down";
+      return `Service not ready (sample file: ${sampleReady}, Redis: ${redisReady}).`;
+    }
+  }
+
+  return fallback;
+}
+
 /**
  * Fetch EUR→USD summary data for a date range.
  *
@@ -21,11 +49,7 @@ export async function fetchSummary(params: {
   const payload = await response.json();
 
   if (!response.ok) {
-    throw new Error(
-      typeof payload.detail === "string"
-        ? payload.detail
-        : payload.error ?? "Unable to load exchange rates.",
-    );
+    throw new Error(parseApiError(payload, "Unable to load exchange rates."));
   }
 
   return payload as SummaryResponse;

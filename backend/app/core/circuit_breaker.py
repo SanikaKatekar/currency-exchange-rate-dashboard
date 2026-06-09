@@ -3,7 +3,7 @@ Redis-backed circuit breaker with closed, open, and half-open states.
 
 Overview:
     Implements a three-state circuit breaker shared across all API worker
-    processes. Protects upstream Frankfurter calls from repeated failures.
+    processes. Half-open allows exactly one probe request via a Redis SETNX lock.
 
 Classes:
     RedisCircuitBreaker: Async circuit breaker backed by Redis keys.
@@ -14,8 +14,15 @@ from __future__ import annotations
 import time
 from enum import StrEnum
 
+from app.core.logging_config import get_logger
 from app.core.metrics import CIRCUIT_OPENS
 from app.core.redis_client import get_redis
+
+logger = get_logger("circuit_breaker")
+
+
+class CircuitOpenError(RuntimeError):
+    """Raised when the circuit breaker is open and no probe slot is available."""
 
 
 class CircuitState(StrEnum):
@@ -54,25 +61,47 @@ class RedisCircuitBreaker:
         self._failure_threshold = failure_threshold
         self._cooldown_seconds = cooldown_seconds
 
+    async def _try_acquire_probe(self, redis) -> bool:
+        """
+        Atomically claim the single half-open probe slot.
+
+        Returns:
+            ``True`` when this caller acquired the probe lock, else ``False``.
+        """
+        probe_key = f"{self._prefix}:probe"
+        acquired = await redis.set(
+            probe_key,
+            "1",
+            nx=True,
+            ex=self._cooldown_seconds,
+        )
+        if acquired:
+            await redis.set(f"{self._prefix}:state", CircuitState.HALF_OPEN)
+            return True
+        return False
+
     async def allow_request(self) -> bool:
         """
         Determine whether a request should be allowed through the breaker.
 
         Returns:
-            ``True`` when the breaker is closed or half-open; ``False`` when open.
+            ``True`` when closed or this caller holds the half-open probe slot;
+            ``False`` when open or another caller is probing.
         """
         redis = get_redis()
         state = await redis.get(f"{self._prefix}:state")
         if state is None or state == CircuitState.CLOSED:
             return True
         if state == CircuitState.HALF_OPEN:
-            return True
+            probe_key = f"{self._prefix}:probe"
+            if await redis.exists(probe_key):
+                return False
+            return await self._try_acquire_probe(redis)
         if state == CircuitState.OPEN:
             opened_at = float(await redis.get(f"{self._prefix}:opened_at") or 0)
-            if time.time() - opened_at >= self._cooldown_seconds:
-                await redis.set(f"{self._prefix}:state", CircuitState.HALF_OPEN)
-                return True
-            return False
+            if time.time() - opened_at < self._cooldown_seconds:
+                return False
+            return await self._try_acquire_probe(redis)
         return True
 
     async def record_success(self) -> None:
@@ -83,6 +112,7 @@ class RedisCircuitBreaker:
             None.
         """
         redis = get_redis()
+        await redis.delete(f"{self._prefix}:probe")
         await redis.set(f"{self._prefix}:state", CircuitState.CLOSED)
         await redis.set(f"{self._prefix}:failures", 0)
 
@@ -94,9 +124,17 @@ class RedisCircuitBreaker:
             None.
         """
         redis = get_redis()
+        await redis.delete(f"{self._prefix}:probe")
         failures = await redis.incr(f"{self._prefix}:failures")
         state = await redis.get(f"{self._prefix}:state")
         if state == CircuitState.HALF_OPEN or failures >= self._failure_threshold:
             await redis.set(f"{self._prefix}:state", CircuitState.OPEN)
             await redis.set(f"{self._prefix}:opened_at", time.time())
             CIRCUIT_OPENS.inc()
+            logger.warning(
+                "circuit_opened breaker=%s failures=%s state=%s threshold=%s",
+                self._prefix,
+                failures,
+                state,
+                self._failure_threshold,
+            )

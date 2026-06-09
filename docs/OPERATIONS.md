@@ -40,6 +40,11 @@ Clients exceeded 60 req/min on `/api/v1/summary`. Limits are enforced globally p
 
 When Frankfurter fails repeatedly, the Redis-backed breaker opens for `CIRCUIT_BREAKER_COOLDOWN_SECONDS` (default 30s), then enters half-open and allows one probe request. Monitor `fx_circuit_opens_total` on `/metrics`.
 
+## Observability
+
+- **Logs:** Application logs use the `fx_pulse.*` logger hierarchy with `key=value` fields. Search for `request_id=` to correlate HTTP, Frankfurter, circuit breaker, and fallback events.
+- **Metrics:** Prometheus at `/metrics` — `fx_retries_total`, `fx_fallbacks_total`, `fx_circuit_opens_total`, cache hit/miss counters, request latency histograms.
+
 ## Source transparency
 
 | Value | Meaning |

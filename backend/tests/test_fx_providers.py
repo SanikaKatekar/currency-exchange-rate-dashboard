@@ -21,6 +21,7 @@ Functions:
 from __future__ import annotations
 
 import json
+import time
 from datetime import date
 from pathlib import Path
 
@@ -37,7 +38,7 @@ from app.adapters.fx_providers import (
     cache_source_label,
     parse_rates_payload,
 )
-from app.core.circuit_breaker import RedisCircuitBreaker
+from app.core.circuit_breaker import CircuitOpenError, CircuitState, RedisCircuitBreaker
 from app.core.settings import Settings
 from app.domain.ports import FxSeries
 
@@ -166,6 +167,27 @@ async def test_frankfurter_adapter_retries_then_succeeds(
 
 
 @pytest.mark.asyncio
+@respx.mock
+async def test_frankfurter_adapter_open_breaker_makes_no_http_calls(
+    settings: Settings, breaker: RedisCircuitBreaker
+) -> None:
+    """Short-circuit before the URL loop when the circuit breaker is open."""
+    from app.core.redis_client import get_redis
+
+    redis = get_redis()
+    prefix = "fx:circuit:frankfurter"
+    await redis.set(f"{prefix}:state", CircuitState.OPEN)
+    await redis.set(f"{prefix}:opened_at", time.time())
+
+    route = respx.get(url__regex=r"https://api\.frankfurter\.dev/.*")
+    async with httpx.AsyncClient() as client:
+        adapter = FrankfurterAdapter(settings, client, breaker)
+        with pytest.raises(CircuitOpenError):
+            await adapter.fetch_rates(date(2026, 6, 3), date(2026, 6, 3), "EUR", "USD")
+    assert route.call_count == 0
+
+
+@pytest.mark.asyncio
 async def test_file_fallback_adapter(settings: Settings) -> None:
     """Read offline rates from the configured sample file."""
     adapter = FileFallbackAdapter(settings)
@@ -222,6 +244,28 @@ async def test_cached_provider_returns_cache_offline_source(settings: Settings) 
     assert first.source == "offline_fallback"
     assert second.source == "cache(offline)"
     assert StubProvider.calls == 1
+
+
+@pytest.mark.asyncio
+async def test_fallback_provider_uses_file_when_circuit_open(
+    settings: Settings,
+) -> None:
+    """Serve offline data when the live provider circuit breaker is open."""
+    from app.core.circuit_breaker import CircuitOpenError
+
+    class OpenPrimary:
+        async def fetch_rates(
+            self,
+            start: date,
+            end: date,
+            from_currency: str,
+            to_currency: str,
+        ) -> FxSeries:
+            raise CircuitOpenError("Circuit breaker is open")
+
+    fallback = FallbackFxProvider(OpenPrimary(), FileFallbackAdapter(settings))
+    series = await fallback.fetch_rates(date(2026, 6, 3), date(2026, 6, 4), "EUR", "USD")
+    assert series.source == "offline_fallback"
 
 
 @pytest.mark.asyncio

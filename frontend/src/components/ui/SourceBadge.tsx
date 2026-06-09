@@ -18,7 +18,6 @@ const SOURCE_META: Record<
     tone: "text-[var(--warning)]",
     icon: Database,
   },
-  cache: { label: "Cached response", tone: "text-[var(--warning)]", icon: Database },
   offline_fallback: {
     label: "Offline fallback",
     tone: "text-[var(--negative)]",

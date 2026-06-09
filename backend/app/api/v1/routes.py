@@ -12,7 +12,7 @@ Routers:
 Functions:
     health: Return liveness information with timestamp and uptime.
     live: Alias liveness endpoint for orchestrators expecting ``/live``.
-    ready: Return readiness based on offline fallback availability.
+    ready: Return readiness based on Redis connectivity and offline fallback file.
     _summary_handler: Shared summary logic for versioned and legacy routes.
     summary_v1: Versioned summary endpoint.
     legacy_health: Legacy health endpoint returning only status.
@@ -35,7 +35,11 @@ from app.api.v1.schemas import (
     SummaryResponse,
     SummaryTotals,
 )
+from app.core.logging_config import get_logger
+from app.core.redis_client import ping_redis
 from app.core.settings import get_settings
+
+logger = get_logger("api")
 
 router: APIRouter = APIRouter(prefix="/api/v1", tags=["v1"])
 legacy_router: APIRouter = APIRouter(tags=["legacy"])
@@ -72,23 +76,31 @@ async def live() -> HealthResponse:
 @router.get("/ready", response_model=ReadyResponse)
 async def ready() -> ReadyResponse:
     """
-    Return readiness based on offline fallback file availability.
+    Return readiness based on offline fallback file and Redis availability.
 
     Returns:
-        ``ReadyResponse`` when the sample fallback file exists.
+        ``ReadyResponse`` when both dependencies are healthy.
 
     Raises:
-        HTTPException: Returns HTTP 503 when the sample fallback file is missing.
+        HTTPException: Returns HTTP 503 when a required dependency is unavailable.
     """
     file_adapter = get_file_adapter()
     sample_ready: bool = file_adapter.is_ready()
-    status: str = "ready" if sample_ready else "not_ready"
+    redis_ready: bool = await ping_redis()
+    is_ready: bool = sample_ready and redis_ready
+    status: str = "ready" if is_ready else "not_ready"
     response = ReadyResponse(
         status=status,
         timestamp=datetime.now(UTC),
         sample_file_ready=sample_ready,
+        redis_ready=redis_ready,
     )
-    if not sample_ready:
+    if not is_ready:
+        logger.warning(
+            "readiness_check_failed sample_file_ready=%s redis_ready=%s",
+            sample_ready,
+            redis_ready,
+        )
         raise HTTPException(status_code=503, detail=response.model_dump(mode="json"))
     return response
 

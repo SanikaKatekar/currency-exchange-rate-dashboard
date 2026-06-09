@@ -6,17 +6,20 @@
 |-------|------|----------------|
 | API | `backend/app/api/v1/` | HTTP routes, request validation, response schemas |
 | Domain | `backend/app/domain/` | Business rules: summary assembly, pct_change math |
-| Adapters | `backend/app/adapters/` | Frankfurter HTTP, file fallback, cache, circuit breaker |
-| Core | `backend/app/core/` | Config, middleware, metrics, exception handling |
+| Adapters | `backend/app/adapters/` | Frankfurter HTTP, file fallback, Redis cache decorator |
+| Core | `backend/app/core/` | Config, Redis client, circuit breaker, middleware, metrics, logging |
 
 ## Request flow
 
 1. Browser calls `GET /api/v1/summary`
-2. `SummaryService` validates date range
-3. `CachedFxProvider` checks TTL cache
-4. `FallbackFxProvider` tries `FrankfurterAdapter`, then `FileFallbackAdapter`
-5. `calculator.py` builds day rows and totals
-6. JSON response returned with `source` field (`live`, `cache`, `offline_fallback`)
+2. `RateLimitMiddleware` enforces a Redis-backed sliding window per client IP
+3. `SummaryService` validates date range
+4. `CachedFxProvider` checks Redis TTL cache
+5. `FallbackFxProvider` tries `FrankfurterAdapter` (with Redis circuit breaker), then `FileFallbackAdapter`
+6. `calculator.py` builds day rows and totals
+7. JSON response returned with `source` field (`live`, `cache(live)`, `cache(offline)`, `offline_fallback`)
+
+Redis backs the FX cache, rate limiter, and circuit breaker so behavior is consistent across all Uvicorn workers.
 
 ## Frontend/backend separation
 
