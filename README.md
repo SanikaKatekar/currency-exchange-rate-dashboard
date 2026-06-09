@@ -66,6 +66,11 @@ Open http://localhost:5173 — Vite proxies `/api` to the backend on port 8000.
 
 See [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) for full local setup and troubleshooting.
 
+## API authentication
+
+The `/summary` endpoint requires an `X-API-Key` header. See `.env.example` for
+how to generate and configure keys. Health and readiness endpoints are public.
+
 ## API examples
 
 ### Health (with timestamp)
@@ -86,7 +91,8 @@ curl http://localhost:8000/api/v1/health
 ### Summary (daily breakdown)
 
 ```bash
-curl "http://localhost:8000/api/v1/summary?start=2026-06-03&end=2026-06-09&breakdown=day"
+curl -H "X-API-Key: dev-key-do-not-use-in-prod" \
+  "http://localhost:8000/api/v1/summary?start=2026-06-03&end=2026-06-09&breakdown=day"
 ```
 
 ### Readiness (Redis + fallback file)

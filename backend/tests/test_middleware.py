@@ -13,6 +13,7 @@ from app.main import app
 @pytest.mark.asyncio
 async def test_rate_limit_middleware_blocks_burst_requests(
     monkeypatch: pytest.MonkeyPatch,
+    configured_api_key: str,
 ) -> None:
     """Return HTTP 429 from middleware when the Redis window is exceeded."""
     monkeypatch.setenv("RATE_LIMIT_PER_MINUTE", "1")
@@ -24,9 +25,10 @@ async def test_rate_limit_middleware_blocks_burst_requests(
 
     transport = ASGITransport(app=app)
     params = {"start": "2026-06-03", "end": "2026-06-03", "breakdown": "none"}
+    headers = {"X-API-Key": configured_api_key}
     async with AsyncClient(transport=transport, base_url="http://test") as client:
-        first = await client.get("/api/v1/summary", params=params)
-        second = await client.get("/api/v1/summary", params=params)
+        first = await client.get("/api/v1/summary", params=params, headers=headers)
+        second = await client.get("/api/v1/summary", params=params, headers=headers)
 
     assert first.status_code in {200, 400, 503}
     assert second.status_code == 429

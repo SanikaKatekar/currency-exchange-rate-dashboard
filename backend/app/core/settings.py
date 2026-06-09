@@ -45,6 +45,8 @@ class Settings(BaseSettings):
         rate_limit_per_minute: Allowed ``/summary`` requests per IP per minute.
         redis_url: Redis connection URL for shared cache, limits, and breaker state.
         sample_fx_path: Filesystem path to offline fallback JSON data.
+        api_keys: Comma-separated client_name:key pairs (e.g., ``"dashboard:abc123,cli:xyz789"``).
+            Empty disables auth — only safe for local development.
     """
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
@@ -65,6 +67,7 @@ class Settings(BaseSettings):
     rate_limit_per_minute: int = 60
     redis_url: str = "redis://localhost:6379/0"
     sample_fx_path: Path = REPO_ROOT / "data" / "sample_fx.json"
+    api_keys: str = ""
 
     @property
     def cors_origin_list(self) -> list[str]:
@@ -75,6 +78,27 @@ class Settings(BaseSettings):
             List of trimmed, non-empty CORS origin URLs.
         """
         return [origin.strip() for origin in self.cors_origins.split(",") if origin.strip()]
+
+    @property
+    def api_keys_map(self) -> dict[str, str]:
+        """
+        Parse api_keys into a {key: client_name} dict for fast lookup.
+
+        Returns:
+            Mapping of API key to client name. Empty dict when unconfigured.
+        """
+        if not self.api_keys.strip():
+            return {}
+        parsed: dict[str, str] = {}
+        for entry in self.api_keys.split(","):
+            entry = entry.strip()
+            if not entry or ":" not in entry:
+                continue
+            name, key = entry.split(":", 1)
+            name, key = name.strip(), key.strip()
+            if name and key:
+                parsed[key] = name
+        return parsed
 
 
 @lru_cache
