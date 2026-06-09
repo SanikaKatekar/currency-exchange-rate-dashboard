@@ -4,11 +4,11 @@ HTTP middleware for request tracing, logging, and rate limiting.
 Overview:
     Starlette middleware components that enrich each request with a correlation ID,
     emit structured logs and latency metrics, and enforce per-IP rate limits on
-    the summary endpoint.
+    the summary endpoint via a shared Redis sliding window.
 
 Classes:
     RequestContextMiddleware: Attach request IDs, log requests, record latency.
-    RateLimitMiddleware: Apply an in-memory per-IP rate limit to ``/api/v1/summary``.
+    RateLimitMiddleware: Apply a Redis-backed per-IP rate limit to ``/api/v1/summary``.
 """
 
 from __future__ import annotations
@@ -16,15 +16,14 @@ from __future__ import annotations
 import logging
 import time
 import uuid
-from collections import defaultdict, deque
 from collections.abc import Awaitable, Callable
 
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import Response
-from starlette.types import ASGIApp
 
 from app.core.metrics import REQUEST_LATENCY
+from app.core.rate_limiter import allow_request as redis_allow_request
 from app.core.settings import get_settings
 
 logger: logging.Logger = logging.getLogger("fx_pulse")
@@ -77,22 +76,11 @@ class RequestContextMiddleware(BaseHTTPMiddleware):
 
 class RateLimitMiddleware(BaseHTTPMiddleware):
     """
-    Apply a simple in-memory per-IP rate limit to ``/api/v1/summary``.
+    Apply a Redis-backed per-IP rate limit to ``/api/v1/summary``.
 
     Methods:
-        __init__: Initialize middleware and per-IP hit tracking storage.
         dispatch: Enforce rate limits or pass the request downstream.
     """
-
-    def __init__(self, app: ASGIApp) -> None:
-        """
-        Create rate limit middleware with an empty hit tracker.
-
-        Args:
-            app: ASGI application wrapped by this middleware.
-        """
-        super().__init__(app)
-        self._hits: dict[str, deque[float]] = defaultdict(deque)
 
     async def dispatch(
         self,
@@ -117,11 +105,8 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
 
         settings = get_settings()
         client_ip: str = request.client.host if request.client else "unknown"
-        now: float = time.time()
-        window: deque[float] = self._hits[client_ip]
-        while window and now - window[0] > 60:
-            window.popleft()
-        if len(window) >= settings.rate_limit_per_minute:
+        allowed = await redis_allow_request(client_ip, settings.rate_limit_per_minute)
+        if not allowed:
             request_id: str = getattr(request.state, "request_id", "unknown")
             return Response(
                 content='{"error":"Rate limit exceeded","code":"rate_limit_exceeded","request_id":"'
@@ -130,5 +115,4 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
                 status_code=429,
                 media_type="application/json",
             )
-        window.append(now)
         return await call_next(request)

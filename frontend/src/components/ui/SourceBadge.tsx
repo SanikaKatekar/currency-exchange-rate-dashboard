@@ -8,6 +8,16 @@ const SOURCE_META: Record<
   { label: string; tone: string; icon: typeof Radio }
 > = {
   live: { label: "Live market data", tone: "text-[var(--positive)]", icon: Radio },
+  "cache(live)": {
+    label: "Cached live data",
+    tone: "text-[var(--warning)]",
+    icon: Database,
+  },
+  "cache(offline)": {
+    label: "Cached offline data",
+    tone: "text-[var(--warning)]",
+    icon: Database,
+  },
   cache: { label: "Cached response", tone: "text-[var(--warning)]", icon: Database },
   offline_fallback: {
     label: "Offline fallback",

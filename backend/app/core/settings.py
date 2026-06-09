@@ -37,11 +37,13 @@ class Settings(BaseSettings):
         frankfurter_base: Base URL for the Frankfurter public FX API.
         default_from: Default base currency code.
         default_to: Default quote currency code.
-        cache_ttl_seconds: TTL for in-memory FX response cache entries.
+        cache_ttl_seconds: TTL for Redis FX response cache entries.
         max_retries: Maximum retry attempts for Frankfurter HTTP requests.
         retry_backoff_seconds: Initial backoff delay between retries.
         circuit_breaker_threshold: Failures required before opening the circuit.
+        circuit_breaker_cooldown_seconds: Seconds the circuit remains open.
         rate_limit_per_minute: Allowed ``/summary`` requests per IP per minute.
+        redis_url: Redis connection URL for shared cache, limits, and breaker state.
         sample_fx_path: Filesystem path to offline fallback JSON data.
     """
 
@@ -59,7 +61,9 @@ class Settings(BaseSettings):
     max_retries: int = 3
     retry_backoff_seconds: float = 0.5
     circuit_breaker_threshold: int = 5
+    circuit_breaker_cooldown_seconds: int = 30
     rate_limit_per_minute: int = 60
+    redis_url: str = "redis://localhost:6379/0"
     sample_fx_path: Path = REPO_ROOT / "data" / "sample_fx.json"
 
     @property

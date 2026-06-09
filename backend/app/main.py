@@ -26,6 +26,7 @@ from app.api.v1.dependencies import close_http_client, set_start_time
 from app.api.v1.routes import legacy_router, router
 from app.core.exceptions import AppError, app_error_handler, unhandled_error_handler
 from app.core.middleware import RateLimitMiddleware, RequestContextMiddleware
+from app.core.redis_client import close_redis, init_redis
 from app.core.settings import get_settings
 
 
@@ -64,8 +65,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """
     settings = get_settings()
     configure_logging(settings.log_level)
+    await init_redis(settings.redis_url)
     set_start_time(time.time())
     yield
+    await close_redis()
     await close_http_client()
 
 
@@ -98,7 +101,7 @@ def create_app() -> FastAPI:
     app.add_middleware(RateLimitMiddleware)
     app.add_middleware(RequestContextMiddleware)
 
-    app.add_exception_handler(AppError, app_error_handler)
+    app.add_exception_handler(AppError, app_error_handler)  # type: ignore[arg-type]
     app.add_exception_handler(Exception, unhandled_error_handler)
 
     app.include_router(router)
