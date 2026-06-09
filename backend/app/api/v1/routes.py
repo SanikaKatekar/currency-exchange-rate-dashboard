@@ -22,13 +22,19 @@ Functions:
 from __future__ import annotations
 
 import time
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
 from typing import Literal
 
 from fastapi import APIRouter, HTTPException, Query
 
 from app.api.v1.dependencies import get_file_adapter, get_start_time, get_summary_service
-from app.api.v1.schemas import DayRate, HealthResponse, ReadyResponse, SummaryResponse, SummaryTotals
+from app.api.v1.schemas import (
+    DayRate,
+    HealthResponse,
+    ReadyResponse,
+    SummaryResponse,
+    SummaryTotals,
+)
 from app.core.settings import get_settings
 
 router: APIRouter = APIRouter(prefix="/api/v1", tags=["v1"])
@@ -46,7 +52,7 @@ async def health() -> HealthResponse:
     settings = get_settings()
     return HealthResponse(
         status="ok",
-        timestamp=datetime.now(timezone.utc),
+        timestamp=datetime.now(UTC),
         version=settings.app_version,
         uptime_seconds=round(time.time() - get_start_time(), 2),
     )
@@ -79,7 +85,7 @@ async def ready() -> ReadyResponse:
     status: str = "ready" if sample_ready else "not_ready"
     response = ReadyResponse(
         status=status,
-        timestamp=datetime.now(timezone.utc),
+        timestamp=datetime.now(UTC),
         sample_file_ready=sample_ready,
     )
     if not sample_ready:
