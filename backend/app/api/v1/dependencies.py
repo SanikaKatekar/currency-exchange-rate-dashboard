@@ -26,8 +26,11 @@ from app.adapters.fx_providers import (
     FileFallbackAdapter,
     FrankfurterAdapter,
 )
+from app.core.circuit_breaker import RedisCircuitBreaker
 from app.core.settings import Settings, get_settings
 from app.domain.service import SummaryService
+
+HTTP_TIMEOUT = httpx.Timeout(connect=5.0, read=8.0, write=5.0, pool=3.0)
 
 _http_client: httpx.AsyncClient | None = None
 _summary_service: SummaryService | None = None
@@ -69,7 +72,7 @@ def get_http_client() -> httpx.AsyncClient:
     """
     global _http_client
     if _http_client is None:
-        _http_client = httpx.AsyncClient()
+        _http_client = httpx.AsyncClient(timeout=HTTP_TIMEOUT)
     return _http_client
 
 
@@ -108,7 +111,12 @@ def get_summary_service(settings: Settings | None = None) -> SummaryService:
     if _summary_service is None:
         settings = settings or get_settings()
         client = get_http_client()
-        frankfurter = FrankfurterAdapter(settings, client)
+        breaker = RedisCircuitBreaker(
+            "frankfurter",
+            settings.circuit_breaker_threshold,
+            settings.circuit_breaker_cooldown_seconds,
+        )
+        frankfurter = FrankfurterAdapter(settings, client, breaker)
         fallback = FallbackFxProvider(frankfurter, get_file_adapter(settings))
         cached = CachedFxProvider(fallback, settings.cache_ttl_seconds)
         _summary_service = SummaryService(cached)

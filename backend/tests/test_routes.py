@@ -12,6 +12,7 @@ Functions:
     test_health_has_timestamp: Health response includes timestamp metadata.
     test_ready_ok: Ready endpoint succeeds when sample file exists.
     test_summary_validation_error: Invalid date range returns HTTP 400.
+    test_summary_happy_path: Summary math matches mocked Frankfurter data.
     test_openapi_contains_summary: OpenAPI schema exposes summary route.
 """
 
@@ -21,7 +22,8 @@ import json
 from pathlib import Path
 
 import pytest
-from httpx import ASGITransport, AsyncClient
+import respx
+from httpx import ASGITransport, AsyncClient, Response
 
 from app.main import app
 
@@ -89,6 +91,113 @@ async def test_summary_validation_error() -> None:
             params={"start": "2026-06-09", "end": "2026-06-03", "breakdown": "day"},
         )
     assert response.status_code == 400
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_summary_happy_path(sample_file: Path) -> None:
+    """Return correct totals and daily rows for mocked Frankfurter data."""
+    respx.get("https://api.frankfurter.dev/2026-06-03..2026-06-04").mock(
+        return_value=Response(404)
+    )
+    respx.get(
+        "https://api.frankfurter.dev/v1/2026-06-03..2026-06-04?base=EUR&symbols=USD"
+    ).mock(
+        return_value=Response(
+            200,
+            json={
+                "rates": {
+                    "2026-06-03": {"USD": 1.0},
+                    "2026-06-04": {"USD": 1.1},
+                }
+            },
+        )
+    )
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.get(
+            "/api/v1/summary",
+            params={"start": "2026-06-03", "end": "2026-06-04", "breakdown": "day"},
+        )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["source"] == "live"
+    assert payload["totals"]["start_rate"] == 1.0
+    assert payload["totals"]["end_rate"] == 1.1
+    assert payload["totals"]["mean_rate"] == pytest.approx(1.05)
+    assert payload["totals"]["total_pct_change"] == pytest.approx(10.0)
+    assert len(payload["days"]) == 2
+    assert payload["days"][0]["pct_change"] is None
+    assert payload["days"][1]["pct_change"] == pytest.approx(10.0)
+
+
+@pytest.mark.asyncio
+async def test_summary_rate_limit_returns_429(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Return HTTP 429 when the Redis-backed per-IP limit is exceeded."""
+    monkeypatch.setenv("RATE_LIMIT_PER_MINUTE", "1")
+    from app.api.v1 import dependencies as deps
+    from app.core.settings import get_settings
+
+    get_settings.cache_clear()
+    deps._summary_service = None
+
+    transport = ASGITransport(app=app)
+    params = {"start": "2026-06-03", "end": "2026-06-04", "breakdown": "day"}
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        await client.get("/api/v1/summary", params=params)
+        response = await client.get("/api/v1/summary", params=params)
+    assert response.status_code == 429
+    get_settings.cache_clear()
+
+
+@pytest.mark.asyncio
+async def test_summary_date_range_too_large() -> None:
+    """Reject date ranges longer than one year with HTTP 400."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.get(
+            "/api/v1/summary",
+            params={"start": "2024-01-01", "end": "2026-06-09", "breakdown": "day"},
+        )
+    assert response.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_legacy_health_endpoint() -> None:
+    """Legacy health route remains available for older clients."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.get("/health")
+    assert response.status_code == 200
+    assert response.json() == {"status": "ok"}
+
+
+@pytest.mark.asyncio
+async def test_ready_returns_503_without_sample(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Ready endpoint returns 503 when the offline sample file is missing."""
+    monkeypatch.setenv("SAMPLE_FX_PATH", "/tmp/missing-sample-fx.json")
+    from app.api.v1 import dependencies as deps
+    from app.core.settings import get_settings
+
+    get_settings.cache_clear()
+    deps._file_adapter = None
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.get("/api/v1/ready")
+    assert response.status_code == 503
+    get_settings.cache_clear()
+
+
+@pytest.mark.asyncio
+async def test_live_alias_matches_health() -> None:
+    """Live endpoint mirrors the versioned health payload."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        health = await client.get("/api/v1/health")
+        live = await client.get("/api/v1/live")
+    assert live.status_code == 200
+    assert live.json()["status"] == health.json()["status"]
 
 
 @pytest.mark.asyncio

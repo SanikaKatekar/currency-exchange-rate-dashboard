@@ -12,24 +12,42 @@ Classes:
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import date
+from types import MappingProxyType
 from typing import Protocol
 
 
 @dataclass(frozen=True)
 class FxSeries:
     """
-    Normalized daily FX rates plus provenance metadata.
+    Immutable daily FX rates plus provenance metadata.
 
     Attributes:
-        rates: Mapping of calendar dates to FX rates for the quote currency.
-        source: Data provenance label (for example ``live``, ``cache``,
-            ``offline_fallback``).
+        rates: Read-only mapping of calendar dates to FX rates.
+        source: Data provenance label (live, cache(live), cache(offline), etc.).
+
+    Methods:
+        create: Build an immutable ``FxSeries`` from a mutable rates dictionary.
     """
 
-    rates: dict[date, float]
+    rates: Mapping[date, float]
     source: str
+
+    @staticmethod
+    def create(rates: dict[date, float], source: str) -> FxSeries:
+        """
+        Build an immutable ``FxSeries`` from a mutable rates dictionary.
+
+        Args:
+            rates: Daily FX rates keyed by calendar date.
+            source: Provenance label describing where the data originated.
+
+        Returns:
+            Frozen ``FxSeries`` with a read-only rates mapping.
+        """
+        return FxSeries(rates=MappingProxyType(dict(rates)), source=source)
 
 
 class FxRateProvider(Protocol):

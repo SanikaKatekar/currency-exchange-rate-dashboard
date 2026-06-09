@@ -4,6 +4,7 @@
 import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { exportCsv, fetchSummary } from "../api/client";
+import { readParams } from "../lib/urlParams";
 import { ControlPanel } from "../components/ControlPanel";
 import { AppShell } from "../components/layout/AppShell";
 import { RateChart } from "../components/RateChart";
@@ -12,31 +13,9 @@ import { SummaryCards } from "../components/SummaryCards";
 import { LoadingSkeleton } from "../components/ui/LoadingSkeleton";
 import { SourceBadge } from "../components/ui/SourceBadge";
 
-/** Build a default 7-day analysis window ending today. */
-function defaultRange() {
-  const end = new Date();
-  const start = new Date();
-  start.setDate(end.getDate() - 6);
-  return {
-    start: start.toISOString().slice(0, 10),
-    end: end.toISOString().slice(0, 10),
-  };
-}
-
-/** Hydrate initial filter state from URL query parameters when present. */
-function readParams() {
-  const params = new URLSearchParams(window.location.search);
-  const defaults = defaultRange();
-  return {
-    start: params.get("start") ?? defaults.start,
-    end: params.get("end") ?? defaults.end,
-    breakdown: (params.get("breakdown") as "day" | "none") ?? "day",
-  };
-}
-
 /** Primary product surface for FX Pulse. */
 export function Dashboard() {
-  const initial = useMemo(readParams, []);
+  const initial = useMemo(() => readParams(window.location.search), []);
   const [start, setStart] = useState(initial.start);
   const [end, setEnd] = useState(initial.end);
   const [breakdown, setBreakdown] = useState<"day" | "none">(initial.breakdown);

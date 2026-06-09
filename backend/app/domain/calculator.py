@@ -13,6 +13,7 @@ Functions:
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from datetime import date
 from typing import TypedDict
 
@@ -53,7 +54,7 @@ def pct_change(current: float, previous: float | None) -> float | None:
     return round(((current - previous) / previous) * 100, 2)
 
 
-def build_day_rows(daily_rates: dict[date, float]) -> list[DayRow]:
+def build_day_rows(daily_rates: Mapping[date, float]) -> list[DayRow]:
     """
     Build ordered daily rows with day-over-day percentage changes.
 
@@ -81,7 +82,7 @@ def build_day_rows(daily_rates: dict[date, float]) -> list[DayRow]:
     return rows
 
 
-def build_totals(daily_rates: dict[date, float]) -> SummaryTotalsDict:
+def build_totals(daily_rates: Mapping[date, float]) -> SummaryTotalsDict:
     """
     Compute headline totals for the selected date range.
 
