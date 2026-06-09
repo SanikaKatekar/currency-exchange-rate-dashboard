@@ -197,6 +197,24 @@ async def test_ping_redis_returns_false_on_ping_error(monkeypatch: pytest.Monkey
 
 
 @pytest.mark.asyncio
+async def test_rejected_request_does_not_consume_window_slot() -> None:
+    """A rejected request must not leave an entry in the sliding window."""
+    from app.core.redis_client import get_redis
+
+    client_ip = "192.0.2.50"
+    limit = 3
+
+    for _ in range(limit):
+        assert await allow_request(client_ip, limit) is True
+    assert await allow_request(client_ip, limit) is False
+
+    # The rejected request must not be in the sorted set.
+    redis = get_redis()
+    count = await redis.zcard(f"fx:ratelimit:{client_ip}")
+    assert count == limit, "Rejected request polluted the window"
+
+
+@pytest.mark.asyncio
 async def test_cache_hit_preserves_origin_across_calls() -> None:
     """Return transparent cache labels for repeated identical requests."""
     class StubProvider:
